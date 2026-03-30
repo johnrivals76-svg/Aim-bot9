@@ -1,0 +1,281 @@
+-- Services
+local Workspace = game:GetService("Workspace")
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local GuiService = game:GetService("GuiService")
+
+-- Local Player
+local LocalPlayer = Players.LocalPlayer
+local Character = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
+local HumanoidRootPart = Character:WaitForChild("HumanoidRootPart")
+local Camera = Workspace.CurrentCamera
+local PlayerGui = LocalPlayer.PlayerGui
+
+-- Get safe area insets to avoid notches/status bars
+local TopInset, BottomInset = GuiService:GetGuiInset()
+
+-- Settings
+local Settings = {
+    AimLockEnabled = true,
+    AimLockActive = false, -- Controlled by dedicated touch button
+    RainbowHighlightEnabled = true,
+    FOVColor = Color3.new(1, 0, 0), -- Red
+    FOVRadius = 15,
+    SmoothAim = 100, -- 100% = instant alignment
+    Prediction = 100 -- 100% = full movement prediction
+}
+
+-- ------------------------------
+-- Targeting Logic
+-- ------------------------------
+local function GetClosestTarget()
+    local ClosestDistance = math.huge
+    local TargetHead = nil
+
+    for _, Player in pairs(Players:GetPlayers()) do
+        if Player ~= LocalPlayer and Player.Character then
+            local TargetCharacter = Player.Character
+            local Head = TargetCharacter:FindFirstChild("Head")
+            local RootPart = TargetCharacter:FindFirstChild("HumanoidRootPart")
+            
+            -- Team check (don't lock onto teammates)
+            if Player.Team == LocalPlayer.Team then
+                continue
+            end
+
+            if Head and RootPart then
+                local Distance = (RootPart.Position - HumanoidRootPart.Position).Magnitude
+                local Direction = (RootPart.Position - Camera.CFrame.Position).Unit
+                local RaycastParams = RaycastParams.new()
+                RaycastParams.FilterDescendantsInstances = {Character}
+                RaycastParams.FilterType = Enum.RaycastFilterType.Exclude
+                
+                local RaycastResult = Workspace:Raycast(Camera.CFrame.Position, Direction * Distance, RaycastParams)
+
+                -- Check if target is within FOV and visible
+                if Distance < ClosestDistance and Distance <= Settings.FOVRadius and (not RaycastResult or RaycastResult.Instance:IsDescendantOf(TargetCharacter)) then
+                    ClosestDistance = Distance
+                    TargetHead = Head
+                end
+            end
+        end
+    end
+
+    return TargetHead
+end
+
+-- ------------------------------
+-- Prediction Logic
+-- ------------------------------
+local function CalculatePredictedPosition(HeadPart)
+    local CharacterModel = HeadPart.Parent
+    local RootPart = CharacterModel:FindFirstChild("HumanoidRootPart")
+    if not RootPart then return HeadPart.Position end
+
+    -- Get movement velocity
+    local Velocity = RootPart.Velocity
+    -- 100% prediction = apply full velocity
+    local PredictedPosition = HeadPart.Position + (Velocity * RunService.Heartbeat:Wait() * (Settings.Prediction / 100))
+    return PredictedPosition
+end
+
+-- ------------------------------
+-- Rainbow Highlight Logic
+-- ------------------------------
+local ActiveHighlights = {}
+local Hue = 0
+
+local function UpdateHighlights(TargetHead)
+    -- Clear old highlights
+    for Part, HighlightObj in pairs(ActiveHighlights) do
+        HighlightObj:Destroy()
+    end
+    table.clear(ActiveHighlights)
+
+    if Settings.RainbowHighlightEnabled and TargetHead then
+        Hue = (Hue + 0.005) % 1 -- Cycle hue value
+        local RainbowColor = Color3.fromHSV(Hue, 1, 1)
+
+        local Highlight = Instance.new("Highlight")
+        Highlight.Parent = TargetHead
+        Highlight.FillColor = RainbowColor
+        Highlight.OutlineColor = RainbowColor
+        Highlight.FillTransparency = 0.5
+        Highlight.OutlineTransparency = 0
+        Highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+
+        ActiveHighlights[TargetHead] = Highlight
+    end
+end
+
+-- ------------------------------
+-- 📱 MOBILE: Dedicated Touch Activation Button
+-- ------------------------------
+local TouchButtonGui = Instance.new("ScreenGui")
+TouchButtonGui.Name = "AimLockButtonGui"
+TouchButtonGui.Parent = PlayerGui
+TouchButtonGui.IgnoreGuiInset = true
+
+local AimLockButton = Instance.new("TextButton")
+AimLockButton.Name = "AimLockButton"
+AimLockButton.Size = UDim2.new(0, 80, 0, 80) -- Large enough for fingers
+-- Position at bottom right, avoiding bottom inset
+AimLockButton.Position = UDim2.new(1, -100, 1, -100 - BottomInset.Y)
+AimLockButton.BackgroundColor3 = Color3.new(0.2, 0.2, 0.2)
+AimLockButton.BorderColor3 = Color3.new(1, 0, 0)
+AimLockButton.BorderSizePixel = 3
+AimLockButton.Text = "AIM"
+AimLockButton.TextColor3 = Color3.new(1, 1, 1)
+AimLockButton.TextSize = 18
+AimLockButton.Font = Enum.Font.GothamBold
+AimLockButton.Parent = TouchButtonGui
+
+-- Button Input Logic
+AimLockButton.InputBegan:Connect(function(Input)
+    if Input.UserInputType == Enum.UserInputType.Touch or Input.UserInputType == Enum.UserInputType.MouseButton1 then
+        Settings.AimLockActive = true
+    end
+end)
+
+AimLockButton.InputEnded:Connect(function(Input)
+    if Input.UserInputType == Enum.UserInputType.Touch or Input.UserInputType == Enum.UserInputType.MouseButton1 then
+        Settings.AimLockActive = false
+    end
+end)
+
+-- ------------------------------
+-- ✅ UPDATED MAIN LOOP (Mobile Optimized)
+-- ------------------------------
+RunService.RenderStepped:Connect(function(deltaTime)
+    -- Only run if features are enabled and activation is active
+    if not Settings.AimLockEnabled or not Settings.AimLockActive then return end
+
+    local TargetHead = GetClosestTarget()
+    if TargetHead then
+        -- Calculate where the target will be
+        local PredictedPos = CalculatePredictedPosition(TargetHead)
+        local AimDirection = (PredictedPos - Camera.CFrame.Position).Unit
+
+        -- Smooth Aim Logic (100% = instant, <100% = gradual movement)
+        if Settings.SmoothAim == 100 then
+            Camera.CFrame = CFrame.new(Camera.CFrame.Position, Camera.CFrame.Position + AimDirection)
+        else
+            local TargetCFrame = CFrame.new(Camera.CFrame.Position, Camera.CFrame.Position + AimDirection)
+            -- Use deltaTime for frame-rate independent smoothing (consistent on all mobile devices)
+            local SmoothSpeed = (Settings.SmoothAim / 100) * deltaTime * 10
+            Camera.CFrame = Camera.CFrame:Lerp(TargetCFrame, SmoothSpeed)
+        end
+
+        -- Update target highlight
+        UpdateHighlights(TargetHead)
+    end
+end)
+
+-- ------------------------------
+-- 📱 MOBILE: FOV Visualization (Safe Area Adjusted)
+-- ------------------------------
+local FOVGui = Instance.new("ScreenGui")
+FOVGui.Name = "FOVOverlay"
+FOVGui.Parent = PlayerGui
+FOVGui.IgnoreGuiInset = true
+
+local FOVFrame = Instance.new("Frame")
+FOVFrame.Name = "FOVIndicator"
+FOVFrame.Size = UDim2.new(0, 250, 0, 250)
+-- Center FOV, adjust for top inset
+FOVFrame.Position = UDim2.new(0.5, -125, 0.5, -125 + TopInset.Y / 2)
+FOVFrame.BackgroundTransparency = 1
+FOVFrame.Parent = FOVGui
+
+-- Replace with your own circular mask asset ID
+local FOVCircle = Instance.new("ImageLabel")
+FOVCircle.Name = "FOVCircle"
+FOVCircle.Size = UDim2.new(1, 0, 1, 0)
+FOVCircle.BackgroundTransparency = 1
+FOVCircle.Image = "rbxassetid://123456789" -- UPDATE THIS ID
+FOVCircle.ImageColor3 = Settings.FOVColor
+FOVCircle.ImageTransparency = 0.7
+FOVCircle.Parent = FOVFrame
+
+-- ------------------------------
+-- 📱 MOBILE: Rayfield-Style Menu (Touch Optimized)
+-- ------------------------------
+local MenuGui = Instance.new("ScreenGui")
+MenuGui.Name = "DevMenu"
+MenuGui.Parent = PlayerGui
+
+-- Main Window
+local MainWindow = Instance.new("Frame")
+MainWindow.Name = "MainWindow"
+MainWindow.Size = UDim2.new(0, 320, 0, 280)
+-- Position away from top notch
+MainWindow.Position = UDim2.new(0.05, 0, 0.1, TopInset.Y)
+MainWindow.BackgroundColor3 = Color3.new(0.1, 0.1, 0.1)
+MainWindow.BorderColor3 = Color3.new(0.3, 0.3, 0.3)
+MainWindow.BorderSizePixel = 2
+MainWindow.Parent = MenuGui
+
+-- Title Bar (Draggable Area)
+local TitleBar = Instance.new("Frame")
+TitleBar.Name = "TitleBar"
+TitleBar.Size = UDim2.new(1, 0, 0, 30)
+TitleBar.BackgroundColor3 = Color3.new(0.2, 0.2, 0.2)
+TitleBar.Parent = MainWindow
+
+local TitleText = Instance.new("TextLabel")
+TitleText.Name = "TitleText"
+TitleText.Size = UDim2.new(1, -20, 1, 0)
+TitleText.Position = UDim2.new(0, 10, 0, 0)
+TitleText.BackgroundTransparency = 1
+TitleText.Text = "Game Dev Tools"
+TitleText.TextColor3 = Color3.new(1, 1, 1)
+TitleText.Font = Enum.Font.GothamBold
+TitleText.TextSize = 14
+TitleText.Parent = TitleBar
+
+-- Draggable Logic (Supports Mouse + Touch)
+local Dragging, DragStart, StartPos = false, nil, nil
+TitleBar.InputBegan:Connect(function(Input)
+    if Input.UserInputType == Enum.UserInputType.MouseButton1 or Input.UserInputType == Enum.UserInputType.Touch then
+        Dragging = true
+        DragStart = Input.Position
+        StartPos = MainWindow.Position
+    end
+end)
+
+TitleBar.InputChanged:Connect(function(Input)
+    if Dragging and (Input.UserInputType == Enum.UserInputType.MouseMovement or Input.UserInputType == Enum.UserInputType.Touch) then
+        local Delta = Input.Position - DragStart
+        MainWindow.Position = UDim2.new(
+            StartPos.X.Scale,
+            StartPos.X.Offset + Delta.X,
+            StartPos.Y.Scale,
+            StartPos.Y.Offset + Delta.Y
+        )
+    end
+end)
+
+TitleBar.InputEnded:Connect(function(Input)
+    if Input.UserInputType == Enum.UserInputType.MouseButton1 or Input.UserInputType == Enum.UserInputType.Touch then
+        Dragging = false
+    end
+end)
+
+-- Controls: Aim Lock Toggle (Large Touch Hitbox)
+local AimLockToggle = Instance.new("TextButton")
+AimLockToggle.Name = "AimLockToggle"
+AimLockToggle.Size = UDim2.new(0, 180, 0, 44)
+AimLockToggle.Position = UDim2.new(0, 10, 0, 40)
+AimLockToggle.BackgroundColor3 = Settings.AimLockEnabled and Color3.new(0, 1, 0) or Color3.new(1, 0, 0)
+AimLockToggle.Text = "Aim Lock: " .. (Settings.AimLockEnabled and "ON" or "OFF")
+AimLockToggle.TextColor3 = Color3.new(1, 1, 1)
+AimLockToggle.TextSize = 16
+AimLockToggle.Parent = MainWindow
+
+AimLockToggle.MouseButton1Click:Connect(function()
+    Settings.AimLockEnabled = not Settings.AimLockEnabled
+    AimLockToggle.BackgroundColor3 = Settings.AimLockEnabled and Color3.new(0, 1, 0) or Color3.new(1, 0, 0)
+    AimLockToggle.Text = "Aim Lock: " .. (Settings.AimLockEnabled and "ON" or "OFF")
+end)
+
