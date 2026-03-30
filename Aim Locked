@@ -1,0 +1,115 @@
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+
+local LocalPlayer = Players.LocalPlayer
+local Camera = workspace.CurrentCamera
+
+-- STATE
+local isLocked = false
+local targetPartName = "Head"
+local lockedNPC = nil
+
+local SMOOTHNESS = 0.15
+local MAX_DISTANCE = 120
+
+-- UI SETUP
+local screenGui = Instance.new("ScreenGui", game.CoreGui)
+screenGui.Name = "AI_Menu"
+
+local frame = Instance.new("Frame", screenGui)
+frame.Size = UDim2.new(0, 220, 0, 180)
+frame.Position = UDim2.new(0, 20, 0.5, -90)
+frame.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
+frame.BorderSizePixel = 0
+
+local uiCorner = Instance.new("UICorner", frame)
+uiCorner.CornerRadius = UDim.new(0, 10)
+
+-- TITLE
+local title = Instance.new("TextLabel", frame)
+title.Size = UDim2.new(1, 0, 0, 30)
+title.Text = "AI TARGET MENU"
+title.BackgroundTransparency = 1
+title.TextColor3 = Color3.fromRGB(255,255,255)
+title.Font = Enum.Font.GothamBold
+title.TextSize = 14
+
+-- TOGGLE BUTTON
+local toggleBtn = Instance.new("TextButton", frame)
+toggleBtn.Position = UDim2.new(0, 10, 0, 40)
+toggleBtn.Size = UDim2.new(1, -20, 0, 30)
+toggleBtn.Text = "Lock: OFF"
+toggleBtn.BackgroundColor3 = Color3.fromRGB(40,40,40)
+toggleBtn.TextColor3 = Color3.new(1,1,1)
+
+Instance.new("UICorner", toggleBtn)
+
+toggleBtn.MouseButton1Click:Connect(function()
+	isLocked = not isLocked
+	toggleBtn.Text = isLocked and "Lock: ON" or "Lock: OFF"
+	
+	if not isLocked then
+		lockedNPC = nil
+	end
+end)
+
+-- TARGET SWITCH
+local targetBtn = Instance.new("TextButton", frame)
+targetBtn.Position = UDim2.new(0, 10, 0, 80)
+targetBtn.Size = UDim2.new(1, -20, 0, 30)
+targetBtn.Text = "Target: Head"
+targetBtn.BackgroundColor3 = Color3.fromRGB(40,40,40)
+targetBtn.TextColor3 = Color3.new(1,1,1)
+
+Instance.new("UICorner", targetBtn)
+
+targetBtn.MouseButton1Click:Connect(function()
+	if targetPartName == "Head" then
+		targetPartName = "HumanoidRootPart"
+		targetBtn.Text = "Target: Torso"
+	else
+		targetPartName = "Head"
+		targetBtn.Text = "Target: Head"
+	end
+end)
+
+-- FIND NPC
+local function getClosestNPC()
+	local closest = nil
+	local shortest = MAX_DISTANCE
+	
+	for _, model in ipairs(workspace:GetChildren()) do
+		if model:IsA("Model") and model:FindFirstChild("Humanoid") and not Players:GetPlayerFromCharacter(model) then
+			
+			local part = model:FindFirstChild(targetPartName)
+			if part then
+				local dist = (part.Position - Camera.CFrame.Position).Magnitude
+				
+				if dist < shortest then
+					shortest = dist
+					closest = part
+				end
+			end
+		end
+	end
+	
+	return closest
+end
+
+-- CAMERA LOCK
+RunService.RenderStepped:Connect(function()
+	if isLocked then
+		if not lockedNPC or not lockedNPC.Parent then
+			lockedNPC = getClosestNPC()
+		end
+		
+		if lockedNPC then
+			local camPos = Camera.CFrame.Position
+			local targetPos = lockedNPC.Position
+			
+			local newCF = CFrame.new(camPos, targetPos)
+			Camera.CFrame = Camera.CFrame:Lerp(newCF, SMOOTHNESS)
+		end
+	end
+end)
